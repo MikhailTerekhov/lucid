@@ -25,6 +25,81 @@ import tensorflow as tf
 from lucid.misc.iter_nd_utils import recursive_enumerate_nd, dict_to_ndarray, batch_iter
 
 
+def is_float(x):
+    return isinstance(x, float) or isinstance(x, np.float32) or isinstance(x, np.float64)
+
+
+def get_activations_knockout(model, images, knockout_layer, knockout_feature_ind, knockout_value,
+                             output_layer, batch_size=256, outer_batch_size=8192):
+    """
+    Evaluate activations on input images, but replace the value of the specified feature in the layer with a constant value.
+    This is called "knockout" in the literature.
+
+    knockout_value can either be a scalar or a numpy array of the same shape as the corrsponding slice of the activations.
+    In the latter case, the shape should be (images.shape[0], *activations.shape[1:-1]).
+    """
+    out_vals = []
+    with tqdm.tqdm(total=images.shape[0], desc='Evaluating knockout activations') as pbar:
+        for bi in range(0, images.shape[0], outer_batch_size):
+            o_batch = images[bi:bi + outer_batch_size, ...]
+            vals = []
+            with tf.compat.v1.Graph().as_default(), tf.compat.v1.Session() as sess:
+                t_img = tf.compat.v1.placeholder("float32", [None, None, None, 3])
+                T = model.import_graph(t_img)
+                t_knockout = T(knockout_layer)
+                t_output = T(output_layer)
+
+                for batch_i in range(0, o_batch.shape[0], batch_size):
+                    batch = np.stack([cv2.resize(img, (224, 224))
+                                      for img in o_batch[batch_i:batch_i + batch_size, ...]],
+                                     axis=0)
+                    handle_first = sess.partial_run_setup([t_knockout], [t_img])
+                    acts = sess.partial_run(handle_first, t_knockout, feed_dict={t_img: batch})
+                    val = np.full(acts[..., knockout_feature_ind].shape, knockout_value) \
+                        if is_float(knockout_value) \
+                        else knockout_value[bi + batch_i:bi + batch_i + batch_size, ...]
+                    acts[..., knockout_feature_ind] = val
+                    handle_second = sess.partial_run_setup([t_output], [t_knockout])
+                    outputs = sess.partial_run(handle_second, t_output, feed_dict={t_knockout: acts})
+                    out_vals.append(outputs)
+                    pbar.update(batch_size)
+    return np.concatenate(out_vals, axis=0)
+
+
+def get_activations_new(model, images, layer, feature_ind=None, mean_axes=None, batch_size=256, outer_batch_size=8192,
+                        dtype=None):
+    """Mikhail's version of get_activations that works with TF2 in compatibility mode.
+
+    If feature_ind is not None, returns only the specified feature (activations[..., feature_ind]).
+    If mean_axes is not None, returns the mean over the specified axes (np.mean(activations, axis=mean_axes)).
+    For intermediate levels of the network one of them might need to be specified to avoid going OOM with the result.
+    """
+    out_vals = []
+    with tqdm.tqdm(total=images.shape[0], desc='Evaluating activations') as pbar:
+        for bi in range(0, images.shape[0], outer_batch_size):
+            o_batch = images[bi:bi + outer_batch_size, ...]
+            with tf.compat.v1.Graph().as_default(), tf.compat.v1.Session() as sess:
+                t_img = tf.compat.v1.placeholder("float32", [None, None, None, 3])
+                T = model.import_graph(t_img)
+                t_layer = T(layer)
+
+                vals = []
+                for batch_i in range(0, o_batch.shape[0], batch_size):
+                    batch = np.stack(
+                        [cv2.resize(img, (224, 224)) for img in o_batch[batch_i:batch_i + batch_size, ...]], axis=0)
+                    acts = t_layer.eval({t_img: batch})
+                    if dtype is not None:
+                        acts = acts.astype(dtype)
+                    if feature_ind is not None:
+                        acts = acts[..., feature_ind]
+                    elif mean_axes is not None:
+                        acts = np.mean(acts, axis=mean_axes)
+                    vals.append(acts)
+                    pbar.update(batch_size)
+                out_vals.append(tf.concat(vals, axis=0).eval())
+    return np.concatenate(out_vals, axis=0)
+
+
 def get_activations_iter(model, layer, generator, reducer="mean", batch_size=64,
                          dtype=None, ind_shape=None, center_only=False):
   """Collect center activtions of a layer over many images from an iterable obj.
