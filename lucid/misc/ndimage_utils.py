@@ -15,6 +15,12 @@
 from __future__ import absolute_import, division, print_function
 import numpy as np
 from scipy import ndimage
+import cv2
+
+
+# OpenCV's resize (bilinear) is significantly faster than the one below
+def quick_resize(image, target_size):
+  return np.array([cv2.resize(image[i, ...], target_size) for i in range(image.shape[0])])
 
 
 def resize(image, target_size=None, ratios=None, **kwargs):

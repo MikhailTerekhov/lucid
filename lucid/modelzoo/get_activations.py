@@ -21,12 +21,11 @@ from collections import defaultdict
 
 import numpy as np
 import tensorflow as tf
+import tqdm
+import timeit
 
 from lucid.misc.iter_nd_utils import recursive_enumerate_nd, dict_to_ndarray, batch_iter
-
-
-def is_float(x):
-    return isinstance(x, float) or isinstance(x, np.float32) or isinstance(x, np.float64)
+from lucid.misc.ndimage_utils import resize, quick_resize
 
 
 def get_activations_knockout(model, images, knockout_layer, knockout_feature_ind, knockout_value,
@@ -38,6 +37,11 @@ def get_activations_knockout(model, images, knockout_layer, knockout_feature_ind
     knockout_value can either be a scalar or a numpy array of the same shape as the corrsponding slice of the activations.
     In the latter case, the shape should be (images.shape[0], *activations.shape[1:-1]).
     """
+
+    def is_float(x):
+      return isinstance(x, float) or isinstance(x, np.float32) or isinstance(x,
+                                                                             np.float64)
+
     out_vals = []
     with tqdm.tqdm(total=images.shape[0], desc='Evaluating knockout activations') as pbar:
         for bi in range(0, images.shape[0], outer_batch_size):
@@ -50,9 +54,8 @@ def get_activations_knockout(model, images, knockout_layer, knockout_feature_ind
                 t_output = T(output_layer)
 
                 for batch_i in range(0, o_batch.shape[0], batch_size):
-                    batch = np.stack([cv2.resize(img, (224, 224))
-                                      for img in o_batch[batch_i:batch_i + batch_size, ...]],
-                                     axis=0)
+                    batch = quick_resize(o_batch[batch_i:batch_i + batch_size, ...], (224, 224))
+
                     handle_first = sess.partial_run_setup([t_knockout], [t_img])
                     acts = sess.partial_run(handle_first, t_knockout, feed_dict={t_img: batch})
                     val = np.full(acts[..., knockout_feature_ind].shape, knockout_value) \
@@ -85,8 +88,7 @@ def get_activations_new(model, images, layer, feature_ind=None, mean_axes=None, 
 
                 vals = []
                 for batch_i in range(0, o_batch.shape[0], batch_size):
-                    batch = np.stack(
-                        [cv2.resize(img, (224, 224)) for img in o_batch[batch_i:batch_i + batch_size, ...]], axis=0)
+                    batch = quick_resize(o_batch[batch_i:batch_i + batch_size, ...], (224, 224))
                     acts = t_layer.eval({t_img: batch})
                     if dtype is not None:
                         acts = acts.astype(dtype)
