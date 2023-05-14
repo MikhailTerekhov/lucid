@@ -66,6 +66,8 @@ setup(
         "more-itertools",
         "tf_slim",
         "tensorflow_addons",
+        "tqdm",
+        "opencv-python"
     ],
     setup_requires=["pytest-runner"],
     tests_require=test_deps,
